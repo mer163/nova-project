@@ -5,18 +5,21 @@ import {
 } from '../ui.js';
 import { state } from '../store.js';
 
-let filter = { kind: 'requirement', spaceId: '', view: 'list', q: '', status: '', mine: false };
+let filter = { kind: 'requirement', spaceId: '', iterationId: '', view: 'list', q: '', status: '', mine: false };
 let cache = { items: [], counts: {} };
+let selection = new Set();
 
 export async function renderIssues({ content, topbar, route, navigate }) {
   if (route?.params?.kind) filter.kind = route.params.kind;
   if (route?.params?.space) filter.spaceId = route.params.space;
+  if (route?.params?.iterationId) filter.iterationId = route.params.iterationId;
   if (!state.spaces.length) state.spaces = (await api.get('/api/spaces')).items;
 
   topbar.replaceChildren(
     el('h1', {}, '需求与缺陷'),
     el('span', { class: 'spacer' }),
     el('button', { class: 'btn', onclick: () => openSpaceFilter(navigate) }, '⌸ 空间筛选'),
+    el('button', { class: 'btn', onclick: () => exportCsv() }, '⇩ 导出'),
     el('button', { class: 'btn primary', onclick: () => openCreate(navigate) }, '+ 新建'),
   );
 
@@ -32,14 +35,16 @@ export async function renderIssues({ content, topbar, route, navigate }) {
       spaceId: filter.spaceId,
       status: filter.status,
       q: filter.q,
+      iterationId: filter.iterationId,
       assigneeId: filter.mine ? state.user.id : '',
     })}`);
     cache.items = data.items;
     cache.counts = data.counts;
     state.issueCount = data.total;
+    selection = new Set([...selection].filter((id) => data.items.some((i) => i.id === id)));
     renderToolbar(toolbar, data, draw);
     if (filter.view === 'board') renderBoard(body, data, navigate, draw);
-    else renderTable(body, data, navigate);
+    else renderTable(body, data, navigate, draw);
     if (route?.params?.open) {
       openIssue(route.params.open, draw);
       route.params.open = null;
@@ -108,10 +113,25 @@ function renderToolbar(toolbar, data, draw) {
     onclick: () => { filter.mine = !filter.mine; draw(); },
   }, '只看我的');
 
-  toolbar.replaceChildren(kindSeg, spaceSel, search, mineBtn, el('span', { class: 'spacer' }), viewSeg);
+  const iterationSel = select(
+    [{ value: '', label: '全部迭代' }, ...(state.iterations ?? []).map((i) => ({ value: i.id, label: i.name }))],
+    filter.iterationId,
+    { style: 'width:170px;height:32px', onchange: (e) => { filter.iterationId = e.target.value; draw(); } },
+  );
+
+  const toolbarNodes = [kindSeg, spaceSel, iterationSel, search, mineBtn, el('span', { class: 'spacer' })];
+  if (selection.size) {
+    toolbarNodes.push(
+      el('span', { style: 'font-size:12.5px;color:#646a73' }, `已选 ${selection.size} 条`),
+      el('button', { class: 'btn sm', onclick: () => openBulk(draw) }, '批量修改'),
+      el('button', { class: 'btn sm ghost', onclick: () => { selection.clear(); draw(); } }, '取消选择'),
+    );
+  }
+  toolbarNodes.push(viewSeg);
+  toolbar.replaceChildren(...toolbarNodes);
 }
 
-function renderTable(body, data, navigate) {
+function renderTable(body, data, navigate, draw) {
   if (!data.items.length) {
     body.replaceChildren(el('div', { class: 'empty' },
       el('strong', {}, '没有符合条件的工单'),
@@ -119,23 +139,42 @@ function renderTable(body, data, navigate) {
     ));
     return;
   }
-  const rows = data.items.map((i) => el('tr', { onclick: () => openIssue(i.id) },
-    el('td', { class: 'key' }, i.key),
-    el('td', {}, el('div', { class: 'title-cell' },
-      el('span', { class: 'dotmark', style: `background:${kindMeta(i.kind).color}` }),
-      el('span', {}, i.title),
-      ...(i.labels ?? []).map((l) => el('span', { class: 'tag' }, l)),
-    )),
-    el('td', {}, statusTag(i)),
-    el('td', {}, priorityTag(i.priority)),
-    el('td', {}, i.assigneeName ? el('div', { style: 'display:flex;align-items:center;gap:6px' }, avatar({ name: i.assigneeName }), i.assigneeName) : el('span', { style: 'color:#8f959e' }, '未指派')),
-    el('td', { class: 'ellipsis', style: 'max-width:120px;color:#646a73' }, i.spaceName),
-    el('td', { style: 'color:#8f959e;font-size:12px' }, fmtTime(i.updatedAt)),
-  ));
+  const allBox = el('input', { type: 'checkbox', 'aria-label': '全选' });
+  allBox.checked = data.items.length > 0 && data.items.every((i) => selection.has(i.id));
+  allBox.addEventListener('change', () => {
+    selection = allBox.checked ? new Set(data.items.map((i) => i.id)) : new Set();
+    draw();
+  });
+
+  const rows = data.items.map((i) => {
+    const box = el('input', { type: 'checkbox', 'aria-label': `选择 ${i.key}` });
+    box.checked = selection.has(i.id);
+    box.addEventListener('change', () => {
+      if (box.checked) selection.add(i.id);
+      else selection.delete(i.id);
+      draw();
+    });
+    return el('tr', { onclick: () => openIssue(i.id) },
+      el('td', { style: 'width:32px', onclick: (e) => e.stopPropagation() }, box),
+      el('td', { class: 'key' }, i.key),
+      el('td', {}, el('div', { class: 'title-cell' },
+        el('span', { class: 'dotmark', style: `background:${kindMeta(i.kind).color}` }),
+        el('span', {}, i.title),
+        ...(i.labels ?? []).map((l) => el('span', { class: 'tag' }, l)),
+      )),
+      el('td', {}, statusTag(i)),
+      el('td', {}, priorityTag(i.priority)),
+      el('td', {}, i.assigneeName ? el('div', { style: 'display:flex;align-items:center;gap:6px' }, avatar({ name: i.assigneeName }), i.assigneeName) : el('span', { style: 'color:#8f959e' }, '未指派')),
+      el('td', { class: 'ellipsis', style: 'max-width:130px;color:#646a73' }, i.iterationName ?? '—'),
+      el('td', { class: 'ellipsis', style: 'max-width:120px;color:#646a73' }, i.spaceName),
+      el('td', { style: 'color:#8f959e;font-size:12px' }, fmtTime(i.updatedAt)),
+    );
+  });
 
   body.replaceChildren(el('table', { class: 'table' },
     el('thead', {}, el('tr', {},
-      ...['编号', '标题', '状态', '优先级', '负责人', '空间', '更新时间'].map((h) => el('th', {}, h)),
+      el('th', { style: 'width:32px' }, allBox),
+      ...['编号', '标题', '状态', '优先级', '负责人', '迭代', '空间', '更新时间'].map((h) => el('th', {}, h)),
     )),
     el('tbody', {}, ...rows),
   ));
@@ -210,10 +249,25 @@ export async function openIssue(id, onChange) {
   const { issue, workflow } = await api.get(`/api/issues/${id}`);
   const isEditor = issue.canEdit;
 
+  const watchBtn = el('button', {
+    class: 'btn ghost sm',
+    style: issue.watching ? 'color:#3370ff' : '',
+    onclick: async () => {
+      try {
+        const res = await api.post(`/api/issues/${id}/watch`);
+        issue.watching = res.watching;
+        watchBtn.textContent = res.watching ? '★ 已关注' : '☆ 关注';
+        watchBtn.style.color = res.watching ? '#3370ff' : '';
+        toast(res.watching ? '已关注该工单，状态变更会通知你' : '已取消关注');
+      } catch (err) { toast(err.message, 'err'); }
+    },
+  }, issue.watching ? '★ 已关注' : '☆ 关注');
+
   const head = el('div', { class: 'drawer-head' },
     kindTag(issue.kind),
     el('span', { class: 'key', style: 'color:#8f959e;font-size:12.5px' }, issue.key),
     el('span', { style: 'flex:1' }),
+    watchBtn,
     el('button', { class: 'btn ghost sm', onclick: close }, '✕'),
   );
 
@@ -280,7 +334,25 @@ export async function openIssue(id, onChange) {
   addMeta('状态', stateSel);
   addMeta('负责人', assigneeSel);
   addMeta('优先级', prioritySel);
+  const iterationSel = isEditor
+    ? select(
+      [{ value: '', label: '未归入迭代' }, ...(state.iterations ?? []).map((i) => ({ value: i.id, label: i.name }))],
+      issue.iterationId ?? '',
+      {
+        style: 'width:auto;min-width:140px;height:30px',
+        onchange: async (e) => {
+          try {
+            await api.patch(`/api/issues/${id}`, { iterationId: e.target.value || null });
+            toast('迭代已更新');
+            onChange?.();
+          } catch (err) { toast(err.message, 'err'); }
+        },
+      },
+    )
+    : (issue.iterationName ?? '未归入迭代');
+
   addMeta('所属空间', issue.spaceName);
+  addMeta('迭代', iterationSel);
   addMeta('截止日期', issue.dueDate ? fmtDate(issue.dueDate) : '未设置');
   addMeta('创建人', `${issue.creatorName ?? '—'} · ${fmtTime(issue.createdAt)}`);
 
@@ -305,6 +377,8 @@ export async function openIssue(id, onChange) {
     nextSteps.length ? el('div', {}, el('div', { style: 'font-size:12px;color:#8f959e;margin-bottom:8px' }, '可执行流转'), actionRow) : null,
     el('div', { class: 'section-title' }, '描述', el('span', { class: 'line' })),
     renderDescription(issue, isEditor, id, onChange),
+    el('div', { class: 'section-title' }, `附件 ${issue.attachments?.length ?? 0}`, el('span', { class: 'line' })),
+    renderAttachments(issue, isEditor, id, () => openIssueLoop()),
     el('div', { class: 'section-title' }, `评论 ${issue.comments?.length ?? 0}`, el('span', { class: 'line' })),
     renderComments(issue, id, () => openIssueLoop()),
     el('div', { class: 'section-title' }, '操作记录', el('span', { class: 'line' })),
@@ -433,3 +507,134 @@ export function openCreate(navigate) {
 }
 
 export { renderIssues as default };
+
+function exportCsv() {
+  const url = `/api/issues/export${api.qs({
+    kind: filter.kind,
+    spaceId: filter.spaceId,
+    iterationId: filter.iterationId,
+    q: filter.q,
+  })}`;
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = '';
+  document.body.append(a);
+  a.click();
+  a.remove();
+  toast('已开始导出当前筛选结果');
+}
+
+function openBulk(draw) {
+  const ids = [...selection];
+  if (!ids.length) return toast('请先选择工单', 'err');
+  const members = el('div', {});
+  const assignee = select([{ value: '', label: '保持不变' }], '', { style: 'height:32px' });
+  const priority = select([{ value: '', label: '保持不变' }, ...['P0', 'P1', 'P2', 'P3'].map((p) => ({ value: p, label: p }))], '', { style: 'height:32px' });
+  const iteration = select([{ value: '', label: '保持不变' }, { value: '__null__', label: '移出迭代' }, ...(state.iterations ?? []).map((i) => ({ value: i.id, label: i.name }))], '', { style: 'height:32px' });
+
+  Promise.all([api.get('/api/directory')]).then(([dir]) => {
+    for (const u of dir.items) assignee.append(el('option', { value: u.id }, u.name));
+  }).catch(() => {});
+
+  const m = modal({
+    title: `批量修改 ${ids.length} 条工单`,
+    body: el('div', {},
+      el('p', { style: 'font-size:12.5px;color:#646a73;margin:0 0 14px' }, '只处理你有编辑权限的工单，其余会被跳过并提示。'),
+      field('负责人', assignee),
+      field('优先级', priority),
+      field('迭代', iteration),
+      members,
+    ),
+    footer: [
+      el('button', { class: 'btn', onclick: () => m.close() }, '取消'),
+      el('button', { class: 'btn primary', onclick: async () => {
+        const patch = {};
+        if (assignee.value) patch.assigneeId = assignee.value;
+        if (priority.value) patch.priority = priority.value;
+        if (iteration.value) patch.iterationId = iteration.value === '__null__' ? null : iteration.value;
+        if (!Object.keys(patch).length) return toast('请至少选择一个要修改的字段', 'err');
+        try {
+          const res = await api.post('/api/issues/bulk', { ids, patch });
+          toast(`已更新 ${res.updated} 条${res.skipped.length ? `，跳过 ${res.skipped.length} 条` : ''}`);
+          selection.clear();
+          m.close();
+          draw();
+        } catch (err) { toast(err.message, 'err'); }
+      } }, '应用'),
+    ],
+  });
+}
+
+function humanSize(bytes) {
+  if (!bytes) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function renderAttachments(issue, isEditor, id, refresh) {
+  const wrap = el('div', {});
+  const list = el('div', { style: 'display:flex;flex-direction:column;gap:6px' });
+
+  for (const a of issue.attachments ?? []) {
+    const row = el('div', {
+      style: 'display:flex;align-items:center;gap:9px;padding:7px 10px;border:1px solid #dee0e3;border-radius:6px;font-size:12.5px',
+    },
+      el('span', { style: 'font-size:14px' }, '📎'),
+      el('a', {
+        href: `/api/issues/${id}/attachments/${a.id}`,
+        style: 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap',
+      }, a.name),
+      el('span', { style: 'color:#8f959e;font-size:11.5px' }, humanSize(a.size)),
+      isEditor ? el('button', {
+        class: 'btn ghost sm danger',
+        onclick: async () => {
+          try {
+            await api.del(`/api/issues/${id}/attachments/${a.id}`);
+            toast('附件已删除');
+            refresh();
+          } catch (err) { toast(err.message, 'err'); }
+        },
+      }, '删除') : null,
+    );
+    list.append(row);
+  }
+  if (!(issue.attachments ?? []).length) {
+    list.append(el('div', { style: 'font-size:12.5px;color:#8f959e;padding:4px 0' }, '暂无附件'));
+  }
+  wrap.append(list);
+
+  if (isEditor) {
+    const input = el('input', { type: 'file', style: 'display:none' });
+    const upload = el('button', {
+      class: 'btn sm',
+      style: 'margin-top:10px',
+      onclick: () => input.click(),
+    }, '上传附件');
+    input.addEventListener('change', async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      const form = new FormData();
+      form.append('file', file);
+      upload.disabled = true;
+      upload.textContent = '上传中…';
+      try {
+        const res = await fetch(`/api/issues/${id}/attachments`, {
+          method: 'POST',
+          body: form,
+          credentials: 'same-origin',
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || '上传失败');
+        toast('附件已上传');
+        refresh();
+      } catch (err) {
+        toast(err.message, 'err');
+        upload.disabled = false;
+        upload.textContent = '上传附件';
+      }
+    });
+    wrap.append(upload, input, el('span', { style: 'font-size:11.5px;color:#8f959e;margin-left:8px' }, '单个不超过 5MB'));
+  }
+  return wrap;
+}

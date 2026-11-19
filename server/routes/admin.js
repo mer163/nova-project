@@ -215,8 +215,16 @@ export async function dashboard(req, res, { user }) {
       updatedAt: i.updatedAt,
       spaceId: i.spaceId,
     }));
+  const activeIterations = db.data.iterations.filter((it) => ids.has(it.spaceId) && it.status === 'active').length;
+  const myOpen = issues.filter(
+    (i) => i.assigneeId === user.id && !['done', 'closed', 'cancelled'].includes(i.status),
+  ).length;
+  const unread = db.data.notifications.filter((n) => n.userId === user.id && !n.read).length;
   json(res, 200, {
-    totals: { issues: issues.length, spaces: spaces.length, members: db.data.users.length, byKind, byStatus },
+    totals: {
+      issues: issues.length, spaces: spaces.length, members: db.data.users.length,
+      byKind, byStatus, activeIterations, myOpen, unread,
+    },
     workload: Object.entries(byAssignee)
       .map(([userId, count]) => {
         const u = db.data.users.find((x) => x.id === userId);

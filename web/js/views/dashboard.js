@@ -5,6 +5,7 @@ export async function renderDashboard({ content, topbar, navigate }) {
   topbar.replaceChildren(
     el('h1', {}, '工作台'),
     el('span', { class: 'spacer' }),
+    el('button', { class: 'btn', onclick: () => navigate('/iterations') }, '迭代'),
     el('button', { class: 'btn primary', onclick: () => navigate('/issues?new=1') }, '+ 新建'),
   );
   content.replaceChildren(loading(4));
@@ -15,10 +16,10 @@ export async function renderDashboard({ content, topbar, navigate }) {
   const openCount = t.issues - (t.byStatus.done ?? 0) - (t.byStatus.closed ?? 0);
 
   const stats = el('div', { class: 'stat-grid' },
-    statCard('我的待办', workload.openAssigned, `共 ${workload.assigned} 项指派给我`, '#3370ff', workload.assigned ? workload.openAssigned / Math.max(1, workload.assigned) : 0),
+    statCard('我的待办', t.myOpen ?? workload.openAssigned, `共 ${workload.assigned} 项指派给我`, '#3370ff', workload.assigned ? (t.myOpen ?? workload.openAssigned) / Math.max(1, workload.assigned) : 0),
     statCard('未完成工单', openCount, `全部 ${t.issues} 条`, '#ff8800', t.issues ? openCount / t.issues : 0),
     statCard('缺陷', t.byKind.bug ?? 0, '含已关闭', '#f54a45', t.issues ? (t.byKind.bug ?? 0) / t.issues : 0),
-    statCard('成员 / 空间', `${t.members} / ${t.spaces}`, '当前可见范围', '#2ea121', 1),
+    statCard('进行中迭代', t.activeIterations ?? 0, `未读通知 ${t.unread ?? 0} 条`, '#2ea121', 1),
   );
 
   const kindBars = el('div', { style: 'display:flex;flex-direction:column;gap:12px' },

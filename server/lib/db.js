@@ -12,6 +12,8 @@ function emptyDb() {
     spaces: [],
     workflows: [],
     issues: [],
+    iterations: [],
+    notifications: [],
     sessions: {},
     audit: [],
     counters: { issue: 0 },

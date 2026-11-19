@@ -8,6 +8,9 @@ import * as auth from './routes/auth.js';
 import * as issues from './routes/issues.js';
 import * as spaces from './routes/spaces.js';
 import * as admin from './routes/admin.js';
+import * as iterations from './routes/iterations.js';
+import * as notifications from './routes/notifications.js';
+import * as files from './routes/files.js';
 
 export const routes = [
   ['POST', /^\/api\/auth\/login$/, auth.login, { open: true }],
@@ -26,11 +29,27 @@ export const routes = [
 
   ['GET', /^\/api\/issues$/, issues.listIssues],
   ['POST', /^\/api\/issues$/, issues.createIssue],
+  ['POST', /^\/api\/issues\/bulk$/, issues.bulkUpdate],
+  ['GET', /^\/api\/issues\/export$/, issues.exportIssues],
   ['GET', /^\/api\/issues\/([^/]+)$/, issues.getIssue],
   ['PATCH', /^\/api\/issues\/([^/]+)$/, issues.updateIssue],
   ['DELETE', /^\/api\/issues\/([^/]+)$/, issues.deleteIssue],
   ['POST', /^\/api\/issues\/([^/]+)\/transition$/, issues.transitionIssue],
   ['POST', /^\/api\/issues\/([^/]+)\/comments$/, issues.commentIssue],
+  ['GET', /^\/api\/issues\/([^/]+)\/attachments\/([^/]+)$/, files.downloadAttachment],
+  ['POST', /^\/api\/issues\/([^/]+)\/attachments$/, files.uploadAttachment],
+  ['DELETE', /^\/api\/issues\/([^/]+)\/attachments\/([^/]+)$/, files.deleteAttachment],
+  ['POST', /^\/api\/issues\/([^/]+)\/watch$/, issues.toggleWatch],
+
+  ['GET', /^\/api\/iterations$/, iterations.listIterations],
+  ['POST', /^\/api\/iterations$/, iterations.createIteration],
+  ['PATCH', /^\/api\/iterations\/([^/]+)$/, iterations.updateIteration],
+  ['DELETE', /^\/api\/iterations\/([^/]+)$/, iterations.deleteIteration],
+  ['GET', /^\/api\/iterations\/([^/]+)\/board$/, iterations.iterationBoard],
+
+  ['GET', /^\/api\/notifications$/, notifications.listNotifications],
+  ['POST', /^\/api\/notifications\/read-all$/, notifications.markAllRead],
+  ['POST', /^\/api\/notifications\/([^/]+)\/read$/, notifications.markRead],
 
   ['GET', /^\/api\/directory$/, admin.directory],
   ['GET', /^\/api\/users$/, admin.listUsers],
@@ -77,12 +96,12 @@ export function createApp({ webDir = path.join(process.cwd(), 'web') } = {}) {
       if (!opts.open && !session) return json(res, 401, { error: '请先登录', code: 'UNAUTHENTICATED' });
       try {
         const params = {};
+        if (m[1]) params.id = m[1];
+        if (m[2]) params.sub = m[2];
         if (/\/members\/[^/]+$/.test(pathname)) {
           const parts = pathname.split('/').filter(Boolean);
           params.id = parts[2];
           params.userId = parts[4];
-        } else if (m[1]) {
-          params.id = m[1];
         }
         await handler(req, res, { user: session?.user ?? null, params, url, session });
         db.save();
