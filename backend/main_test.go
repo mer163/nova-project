@@ -22,7 +22,7 @@ func TestStateTransitions(t *testing.T) {
 		{"requirements", "requirement_review", "technical_review", true},
 		{"requirements", "requirement_review", "development", false},
 		{"requirements", "development", "technical_review", true},
-		{"requirements", "finished", "closed", true},
+		{"requirements", "finished", "closed", false},
 		{"requirements", "closed", "requirement_review", false},
 		{"bugs", "new", "assigned", true},
 		{"bugs", "new", "closed", false},
@@ -183,6 +183,14 @@ func TestMySQLAccountAndItemLifecycle(t *testing.T) {
 	changeStatus("show_case", 409)
 	changeStatus("technical_review", 200)
 	changeStatus("development", 200)
+	changeStatus("technical_review", 200)
+	changedEndpoints := item
+	changedEndpoints.Endpoints = []string{"client"}
+	response := put("/api/requirements/"+strconv.Itoa(int(item.ID)), changedEndpoints)
+	if response.Code != 409 {
+		t.Fatalf("endpoint change after development rollback: %d %s", response.Code, response.Body.String())
+	}
+	changeStatus("development", 200)
 	changeStatus("show_case", 409)
 	for _, track := range []string{"server", "test_case"} {
 		response := put("/api/requirements/"+strconv.Itoa(int(item.ID))+"/tracks/"+track, map[string]string{"status": "done"})
@@ -199,14 +207,28 @@ func TestMySQLAccountAndItemLifecycle(t *testing.T) {
 	historyResponse := httptest.NewRecorder()
 	router.ServeHTTP(historyResponse, historyRequest)
 	var history []ItemTransition
-	if historyResponse.Code != 200 || json.Unmarshal(historyResponse.Body.Bytes(), &history) != nil || len(history) != 6 {
+	if historyResponse.Code != 200 || json.Unmarshal(historyResponse.Body.Bytes(), &history) != nil || len(history) != 8 {
 		t.Fatalf("history: %d %s", historyResponse.Code, historyResponse.Body.String())
 	}
 	legacy := Item{Kind: "requirements", Title: "Legacy", Priority: "P2", Status: "pending", AssigneeID: &user.ID}
+	legacyDevelopment := Item{Kind: "requirements", Title: "Legacy development", Priority: "P2", Status: "in_progress", AssigneeID: &user.ID}
+	rolledBack := Item{Kind: "requirements", Title: "Rolled back", Priority: "P2", Status: "technical_review", AssigneeID: &user.ID, Endpoints: []string{"server"}}
 	if err := db.Create(&legacy).Error; err != nil {
 		t.Fatal(err)
 	}
+	if err := db.Create(&legacyDevelopment).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&rolledBack).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&ItemTransition{ItemID: rolledBack.ID, ActorID: user.ID, Action: "status", FromStatus: "development", ToStatus: "technical_review"}).Error; err != nil {
+		t.Fatal(err)
+	}
 	defer db.Delete(&legacy)
+	defer db.Delete(&legacyDevelopment)
+	defer db.Delete(&rolledBack)
+	defer db.Where("item_id = ?", rolledBack.ID).Delete(&ItemTransition{})
 	if err := migrateRequirementStatuses(db); err != nil {
 		t.Fatal(err)
 	}
@@ -216,12 +238,24 @@ func TestMySQLAccountAndItemLifecycle(t *testing.T) {
 	if legacy.Status != "requirement_review" || legacy.Template != "feature" || legacy.OwnerID == nil || *legacy.OwnerID != user.ID {
 		t.Fatalf("legacy requirement not migrated: %+v", legacy)
 	}
+	if err := db.First(&legacyDevelopment, legacyDevelopment.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if legacyDevelopment.Status != "development" || !legacyDevelopment.DevelopmentStarted {
+		t.Fatalf("legacy development endpoint lock not migrated: %+v", legacyDevelopment)
+	}
+	if err := db.First(&rolledBack, rolledBack.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !rolledBack.DevelopmentStarted {
+		t.Fatal("previously rolled back requirement lost endpoint lock")
+	}
 	if logout := post("/api/logout", nil, cookie); logout.Code != 204 {
 		t.Fatalf("logout: %d", logout.Code)
 	}
 	request := httptest.NewRequest(http.MethodGet, "/api/me", nil)
 	request.AddCookie(cookie)
-	response := httptest.NewRecorder()
+	response = httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 	if response.Code != 401 {
 		t.Fatalf("logged-out session accepted: %d", response.Code)

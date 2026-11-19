@@ -24,6 +24,10 @@ var requirementSteps = []string{
 var requirementTransitions = func() map[string][]string {
 	result := map[string][]string{"rejected": {}, "closed": {}}
 	for index, state := range requirementSteps {
+		if state == "finished" {
+			result[state] = []string{}
+			continue
+		}
 		next := []string{"closed"}
 		if index > 0 && index < len(requirementSteps)-1 {
 			next = append(next, requirementSteps[index-1])
@@ -54,6 +58,14 @@ type ItemTransition struct {
 }
 
 func migrateRequirementStatuses(db *gorm.DB) error {
+	// Rows written by the previous release have no development flag. Preserve
+	// the endpoint lock for work that has already reached development.
+	if err := db.Model(&Item{}).Where("kind = ? AND status IN ?", "requirements", []string{"in_progress", "done", "development", "show_case", "first_test", "product_walkthrough", "regression_test", "service_online", "launch_review", "freeze", "integration_test", "submission", "finished"}).Update("development_started", true).Error; err != nil {
+		return err
+	}
+	if err := db.Model(&Item{}).Where("kind = ? AND id IN (SELECT item_id FROM item_transitions WHERE from_status = ? OR to_status = ?)", "requirements", "development", "development").Update("development_started", true).Error; err != nil {
+		return err
+	}
 	legacy := map[string]string{"pending": "requirement_review", "in_progress": "development", "done": "finished"}
 	for old, next := range legacy {
 		if err := db.Model(&Item{}).Where("kind = ? AND status = ?", "requirements", old).Update("status", next).Error; err != nil {
@@ -304,7 +316,7 @@ func (app *App) updateRequirement(ctx *gin.Context) {
 			code = 400
 			return errors.New("请至少保留一个涉及端")
 		}
-		if previous != "requirement_review" && previous != "technical_review" && !sameEndpoints(item.Endpoints, input.Endpoints) {
+		if item.DevelopmentStarted && !sameEndpoints(item.Endpoints, input.Endpoints) {
 			code = 409
 			return errors.New("开发开始后不能更改涉及端")
 		}
@@ -317,6 +329,9 @@ func (app *App) updateRequirement(ctx *gin.Context) {
 		}
 		applyRequirementInput(&item, input, actor.ID, false)
 		item.Status = input.Status
+		if item.Status == "development" {
+			item.DevelopmentStarted = true
+		}
 		if previous == "development" && input.Status == "show_case" && !tracksReady(item) {
 			code = 409
 			return errors.New("所有涉及端与用例设计须完成或跳过后才能进入 Show Case")

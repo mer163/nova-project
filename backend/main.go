@@ -45,36 +45,37 @@ type Session struct {
 }
 
 type Item struct {
-	ID                uint              `json:"id" gorm:"primaryKey"`
-	Kind              string            `json:"kind" gorm:"index;size:16;not null"`
-	Title             string            `json:"title" gorm:"size:200;not null"`
-	Description       string            `json:"description" gorm:"type:text"`
-	Priority          string            `json:"priority" gorm:"size:8"`
-	Severity          string            `json:"severity" gorm:"size:20"`
-	Status            string            `json:"status" gorm:"index;size:32;not null"`
-	AssigneeID        *uint             `json:"assigneeId" gorm:"index"`
-	Iteration         string            `json:"iteration" gorm:"size:100"`
-	Template          string            `json:"template" gorm:"size:40"`
-	ProductDirection  string            `json:"productDirection" gorm:"size:100"`
-	BusinessLine      string            `json:"businessLine" gorm:"size:100"`
-	Endpoints         []string          `json:"endpoints" gorm:"serializer:json;type:json"`
-	Risk              string            `json:"risk" gorm:"size:20"`
-	PlannedVersion    string            `json:"plannedVersion" gorm:"size:100"`
-	ActualVersion     string            `json:"actualVersion" gorm:"size:100"`
-	ExpectedAt        string            `json:"expectedAt" gorm:"size:10"`
-	RequirementDoc    string            `json:"requirementDoc" gorm:"size:500"`
-	DesignDoc         string            `json:"designDoc" gorm:"size:500"`
-	TechnicalDoc      string            `json:"technicalDoc" gorm:"size:500"`
-	TestCaseDoc       string            `json:"testCaseDoc" gorm:"size:500"`
-	Roles             map[string]uint   `json:"roles" gorm:"serializer:json;type:json"`
-	Tracks            map[string]string `json:"tracks" gorm:"serializer:json;type:json"`
-	Watchers          []uint            `json:"watchers" gorm:"serializer:json;type:json"`
-	RelatedBugIDs     []uint            `json:"relatedBugIds" gorm:"serializer:json;type:json"`
-	OwnerID           *uint             `json:"ownerId" gorm:"index"`
-	CreatedByID       *uint             `json:"createdById" gorm:"index"`
-	CurrentOperatorID *uint             `json:"currentOperatorId" gorm:"index"`
-	CreatedAt         time.Time         `json:"createdAt"`
-	UpdatedAt         time.Time         `json:"updatedAt"`
+	ID                 uint              `json:"id" gorm:"primaryKey"`
+	Kind               string            `json:"kind" gorm:"index;size:16;not null"`
+	Title              string            `json:"title" gorm:"size:200;not null"`
+	Description        string            `json:"description" gorm:"type:text"`
+	Priority           string            `json:"priority" gorm:"size:8"`
+	Severity           string            `json:"severity" gorm:"size:20"`
+	Status             string            `json:"status" gorm:"index;size:32;not null"`
+	AssigneeID         *uint             `json:"assigneeId" gorm:"index"`
+	Iteration          string            `json:"iteration" gorm:"size:100"`
+	Template           string            `json:"template" gorm:"size:40"`
+	ProductDirection   string            `json:"productDirection" gorm:"size:100"`
+	BusinessLine       string            `json:"businessLine" gorm:"size:100"`
+	Endpoints          []string          `json:"endpoints" gorm:"serializer:json;type:json"`
+	Risk               string            `json:"risk" gorm:"size:20"`
+	PlannedVersion     string            `json:"plannedVersion" gorm:"size:100"`
+	ActualVersion      string            `json:"actualVersion" gorm:"size:100"`
+	ExpectedAt         string            `json:"expectedAt" gorm:"size:10"`
+	RequirementDoc     string            `json:"requirementDoc" gorm:"size:500"`
+	DesignDoc          string            `json:"designDoc" gorm:"size:500"`
+	TechnicalDoc       string            `json:"technicalDoc" gorm:"size:500"`
+	TestCaseDoc        string            `json:"testCaseDoc" gorm:"size:500"`
+	Roles              map[string]uint   `json:"roles" gorm:"serializer:json;type:json"`
+	Tracks             map[string]string `json:"tracks" gorm:"serializer:json;type:json"`
+	Watchers           []uint            `json:"watchers" gorm:"serializer:json;type:json"`
+	RelatedBugIDs      []uint            `json:"relatedBugIds" gorm:"serializer:json;type:json"`
+	OwnerID            *uint             `json:"ownerId" gorm:"index"`
+	CreatedByID        *uint             `json:"createdById" gorm:"index"`
+	CurrentOperatorID  *uint             `json:"currentOperatorId" gorm:"index"`
+	DevelopmentStarted bool              `json:"developmentStarted" gorm:"not null;default:false"`
+	CreatedAt          time.Time         `json:"createdAt"`
+	UpdatedAt          time.Time         `json:"updatedAt"`
 }
 
 type App struct {
