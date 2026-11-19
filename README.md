@@ -1,5 +1,19 @@
 # Nova · 协作项目平台
 
+## Go + React + MySQL MVP
+
+新增的 MVP 位于 `backend/` 与 `frontend/`，覆盖账号注册登录、服务端 Session、基础 RBAC、需求和 Bug 的增删改查、状态流转与列表筛选。Go 服务将 React 构建产物嵌入单一二进制。原有 `server/`、`web/` 是旧版 Node.js 演示原型，保留作参考；下面原型说明不适用于新 MVP。
+
+**推荐启动方式：**准备 Docker Compose，设置 `MYSQL_ROOT_PASSWORD`、`MYSQL_PASSWORD` 与至少 12 位的 `ADMIN_PASSWORD`，运行 `docker compose up --build`，访问 `http://localhost:8080`。首次启动会自动创建管理员账号（默认用户名 `admin`），不会覆盖已有管理员。MySQL 数据保存在 `mysql_data` 卷，服务重启不会清除。对外启用 HTTPS 时设置 `COOKIE_SECURE=true`。
+
+本机开发可先启动 MySQL 8.4，然后设置 `MYSQL_DSN`（需包含 `parseTime=true`），在 `frontend/` 运行 `npm ci && npm run build`，在 `backend/` 运行 `go run .`。前端热更新可另开终端运行 `cd frontend && npm run dev`，Vite 将 `/api` 代理到 8080。构建顺序是前端先、Go 后；Go 的 `embed` 在编译时将 `backend/static` 打入二进制。
+
+核心 API：`POST /api/register`、`POST /api/login`、`POST /api/logout`、`GET /api/me`；`/api/requirements` 和 `/api/bugs` 支持 GET 列表、POST 新建及 `/:id` 的 GET/PUT/DELETE；`GET/POST /api/users`、`PUT /api/users/:id`、`GET/POST /api/roles`、`PUT /api/roles/:id` 用于管理。列表支持 `status`、`assigneeId` 及 `priority`（需求）或 `severity`（Bug）参数。状态枚举分别为 `pending/in_progress/done/rejected/closed` 和 `new/assigned/fixing/verified/closed`；严重程度枚举为 `fatal/critical/normal/minor`。非法状态跳转返回 409。除注册和登录外，所有 API 必须登录；管理写入须有相应 RBAC 权限。
+
+新 MVP 测试：`cd backend && go test ./...`、`cd frontend && npm run build`。设置独立测试库的 `MYSQL_TEST_DSN` 后，Go 测试还会执行真实 MySQL 的账号、权限、工单持久化和登出失效集成测试。浏览器验收需在可运行 MySQL 8.4 的环境执行。
+
+## 旧版 Node.js 演示原型
+
 一个可直接运行的「类飞书项目」原型，覆盖需求管理、缺陷管理与权限管理三条主线。
 
 仓库：https://github.com/mer163/nova-project
