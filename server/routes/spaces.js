@@ -1,6 +1,6 @@
 import { db } from '../lib/db.js';
 import {
-  atLeast, can, requireSpaceAccess, spaceRole,
+  can, requireSpaceAccess, spaceRole,
 } from '../lib/auth.js';
 import { json, readBody } from '../lib/http.js';
 
@@ -85,7 +85,7 @@ export async function updateSpace(req, res, { user, params }) {
   json(res, 200, { space: spaceView(space, user) });
 }
 
-export async function addMember(req, res, { user, params, url }) {
+export async function addMember(req, res, { user, params }) {
   const space = db.data.spaces.find((s) => s.id === params.id);
   if (!space) return json(res, 404, { error: '空间不存在' });
   requireSpaceAccess(user, space, 'owner');
@@ -99,7 +99,7 @@ export async function addMember(req, res, { user, params, url }) {
   else space.members.push({ userId: target.id, role, joinedAt: new Date().toISOString() });
   db.audit(user.id, 'space.member.add', `space:${space.id}`, `${target.name}:${role}`);
   db.save();
-  json(res, 200, { ok: true, role, userId: target.id, spaceId: space.id, _q: url.searchParams.get('x') });
+  json(res, 200, { ok: true, role, userId: target.id, spaceId: space.id });
 }
 
 export async function removeMember(req, res, { user, params }) {
@@ -130,5 +130,3 @@ export async function myWorkload(req, res, { user }) {
     },
   });
 }
-
-export { atLeast };

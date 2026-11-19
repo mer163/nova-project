@@ -1,4 +1,4 @@
-import { api, ApiError } from '../api.js';
+import { api } from '../api.js';
 import {
   el, fmtTime, fmtDate, avatar, statusTag, kindTag, priorityTag,
   kindMeta, toast, modal, field, select, loading,
@@ -6,7 +6,7 @@ import {
 import { state } from '../store.js';
 
 let filter = { kind: 'requirement', spaceId: '', view: 'list', q: '', status: '', mine: false };
-let cache = { items: [], counts: {}, workflow: null };
+let cache = { items: [], counts: {} };
 
 export async function renderIssues({ content, topbar, route, navigate }) {
   if (route?.params?.kind) filter.kind = route.params.kind;
@@ -16,7 +16,7 @@ export async function renderIssues({ content, topbar, route, navigate }) {
   topbar.replaceChildren(
     el('h1', {}, '需求与缺陷'),
     el('span', { class: 'spacer' }),
-    el('button', { class: 'btn', onclick: () => openSpaceFilter() }, '⌸ 空间筛选'),
+    el('button', { class: 'btn', onclick: () => openSpaceFilter(navigate) }, '⌸ 空间筛选'),
     el('button', { class: 'btn primary', onclick: () => openCreate(navigate) }, '+ 新建'),
   );
 
@@ -42,8 +42,8 @@ export async function renderIssues({ content, topbar, route, navigate }) {
     else renderTable(body, data, navigate);
     if (route?.params?.open) {
       openIssue(route.params.open, draw);
-      history.replaceState(null, '', location.hash.replace(`&open=${route.params.open}`, ''));
       route.params.open = null;
+      history.replaceState(null, '', '#/issues');
     }
     if (route?.params?.new) {
       route.params.new = null;
@@ -53,7 +53,7 @@ export async function renderIssues({ content, topbar, route, navigate }) {
   await draw();
 }
 
-function openSpaceFilter() {
+function openSpaceFilter(navigate) {
   const body = el('div', {});
   const sel = select([{ value: '', label: '全部空间' }, ...state.spaces.map((s) => ({ value: s.id, label: s.name }))], filter.spaceId);
   body.append(field('空间', sel));
@@ -62,7 +62,21 @@ function openSpaceFilter() {
     body,
     footer: [
       el('button', { class: 'btn', onclick: () => m.close() }, '取消'),
-      el('button', { class: 'btn primary', onclick: () => { filter.spaceId = sel.value; m.close(); renderIssues({ content: document.querySelector('.content'), topbar: document.querySelector('.topbar'), route: state.route, navigate: (p) => { location.hash = `#${p}`; } }); } }, '应用'),
+      el('button', { class: 'btn primary', onclick: () => {
+        const next = sel.value;
+        m.close();
+        filter.spaceId = next;
+        if (next) navigate(`/issues?space=${next}`);
+        else {
+          navigate('/issues');
+          renderIssues({
+            content: document.querySelector('.content'),
+            topbar: document.querySelector('.topbar'),
+            route: { name: 'issues', params: {} },
+            navigate,
+          });
+        }
+      } }, '应用'),
     ],
   });
 }
@@ -128,8 +142,6 @@ function renderTable(body, data, navigate) {
 }
 
 function renderBoard(body, data, navigate, draw) {
-  const wf = cache.workflow ?? { states: [] };
-  const states = (data.items.length ? [] : []);
   const kinds = filter.kind;
   const byState = {};
   for (const item of data.items) {
