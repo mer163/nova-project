@@ -169,6 +169,87 @@ export function seedIfEmpty() {
     { id: 'cmt-1', authorId: 'u-dev', content: '已在前端补充 spaceRole 判断，viewer 不再渲染编辑入口。', createdAt: daysAgo(2) },
     { id: 'cmt-2', authorId: 'u-qa', content: '需要在回归环境再验证一次只读账号。', createdAt: daysAgo(1.5) },
   ];
+  const day = 86400000;
+  const isoDate = (offset) => new Date(Date.now() + offset * day).toISOString().slice(0, 10);
+  db.data.iterations = [
+    {
+      id: 'itr-2411',
+      spaceId: 'spc-core',
+      name: '11 月迭代 · 权限主线',
+      goal: '完成权限模型、工作流配置与审计闭环',
+      status: 'active',
+      startDate: isoDate(-8),
+      endDate: isoDate(6),
+      creatorId: 'u-pm',
+      createdAt: daysAgo(9),
+    },
+    {
+      id: 'itr-2412',
+      spaceId: 'spc-core',
+      name: '12 月迭代 · 协同增强',
+      goal: '邀请、通知与交付看板',
+      status: 'planned',
+      startDate: isoDate(7),
+      endDate: isoDate(21),
+      creatorId: 'u-pm',
+      createdAt: daysAgo(3),
+    },
+    {
+      id: 'itr-grow-1',
+      spaceId: 'spc-growth',
+      name: '增长实验 · 第 4 期',
+      goal: '邀请转化与空间加入审批',
+      status: 'active',
+      startDate: isoDate(-5),
+      endDate: isoDate(9),
+      creatorId: 'u-pm',
+      createdAt: daysAgo(6),
+    },
+  ];
+  const iterMap = { 'issue-1': 'itr-2411', 'issue-2': 'itr-2411', 'issue-3': 'itr-2411', 'issue-4': 'itr-2411', 'issue-5': 'itr-2411', 'issue-6': 'itr-2411', 'issue-8': 'itr-grow-1' };
+  for (const issue of db.data.issues) {
+    issue.iterationId = iterMap[issue.id] ?? null;
+    issue.watchers = [];
+    issue.attachments = [];
+  }
+  db.data.issues.find((i) => i.id === 'issue-3').watchers = ['u-dev', 'u-qa'];
+  db.data.issues.find((i) => i.id === 'issue-5').watchers = ['u-dev'];
+
+  db.data.notifications = [
+    {
+      id: 'ntf-1',
+      userId: 'u-dev',
+      type: 'issue.assigned',
+      title: 'BUG-0005 指派给你',
+      body: '看板列拖拽后状态未持久化',
+      issueId: 'issue-5',
+      issueKey: 'BUG-0005',
+      read: false,
+      createdAt: daysAgo(0.3),
+    },
+    {
+      id: 'ntf-2',
+      userId: 'u-qa',
+      type: 'issue.transition',
+      title: 'BUG-0006 状态变更',
+      body: '修复中 → 待验证',
+      issueId: 'issue-6',
+      issueKey: 'BUG-0006',
+      read: false,
+      createdAt: daysAgo(2),
+    },
+  ];
+  db.data.notifications.unshift({
+    id: 'ntf-0',
+    userId: 'u-admin',
+    type: 'issue.transition',
+    title: 'REQ-0003 状态变更',
+    body: '开发中 → 待测试',
+    issueId: 'issue-3',
+    issueKey: 'REQ-0003',
+    read: false,
+    createdAt: daysAgo(0.1),
+  });
   db.data.counters.issue = 10;
   db.data.audit = [{ id: 'aud-init', at: daysAgo(30), actorId: 'u-admin', action: 'system.seed', target: 'project', detail: '初始化演示数据' }];
   db.save();

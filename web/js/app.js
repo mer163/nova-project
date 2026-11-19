@@ -7,10 +7,14 @@ import { renderIssues } from './views/issues.js';
 import { renderSpaces } from './views/spaces.js';
 import { renderAdmin } from './views/admin.js';
 import { renderSettings } from './views/settings.js';
+import { renderIterations } from './views/iterations.js';
+import { renderNotifications, refreshBadge } from './views/notifications.js';
 
 const NAV = [
   { id: 'dashboard', label: '工作台', icon: '◎' },
   { id: 'issues', label: '需求与缺陷', icon: '▤' },
+  { id: 'iterations', label: '迭代', icon: '⧉' },
+  { id: 'notifications', label: '通知', icon: '✉', badge: true },
   { id: 'spaces', label: '空间', icon: '⌸' },
   { id: 'admin', label: '成员与权限', icon: '⛨' },
   { id: 'settings', label: '设置', icon: '⚙' },
@@ -70,6 +74,13 @@ function nav() {
     if (item.id === 'issues' && state.issueCount != null) {
       btn.append(el('span', { class: 'count' }, String(state.issueCount)));
     }
+    if (item.badge) {
+      const badge = el('span', {
+        class: 'count', dataset: { navBadge: item.id },
+        style: state.unreadCount ? '' : 'display:none',
+      }, state.unreadCount ? String(state.unreadCount) : '');
+      btn.append(badge);
+    }
     list.append(btn);
   }
   return list;
@@ -78,6 +89,8 @@ function nav() {
 const renderers = {
   dashboard: renderDashboard,
   issues: renderIssues,
+  iterations: renderIterations,
+  notifications: renderNotifications,
   spaces: renderSpaces,
   admin: renderAdmin,
   settings: renderSettings,
@@ -124,7 +137,10 @@ async function boot() {
     state.meta = await api.get('/api/meta');
     const spaces = await api.get('/api/spaces');
     state.spaces = spaces.items;
+    const iterations = await api.get('/api/iterations').catch(() => ({ items: [] }));
+    state.iterations = iterations.items;
     await render();
+    refreshBadge();
   } catch (err) {
     if (err.status === 401) return renderLogin(root, async () => {
       await boot();
@@ -134,6 +150,11 @@ async function boot() {
 }
 
 window.addEventListener('hashchange', () => render());
+window.addEventListener('nova:refresh-iterations', async () => {
+  const iterations = await api.get('/api/iterations').catch(() => ({ items: [] }));
+  state.iterations = iterations.items;
+  render();
+});
 window.addEventListener('nova:logout', async () => {
   await api.post('/api/auth/logout', {});
   state.user = null;
