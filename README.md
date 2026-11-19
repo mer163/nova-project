@@ -73,6 +73,8 @@ tests/
   api.test.js         权限、工作流与接口行为测试
 docs/
   permissions.md      权限模型说明
+  product-overview.md 产品范围与信息架构
+  delivery.md         交付说明与验证记录
 ```
 
 ## 已知边界
