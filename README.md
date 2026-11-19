@@ -23,7 +23,7 @@ npm test                      # 接口与权限测试
 | `qa@nova.dev` | 测试 | 验证缺陷、推进状态 |
 | `guest@nova.dev` | 访客 | 只读已授权空间，无编辑入口 |
 
-演示密码默认为 `nova-demo-2026`，可用 `NOVA_SEED_PASSWORD` 覆盖；登录页点击演示账号会自动填充。
+演示密码为 `nova-demo-2024`，可用 `NOVA_SEED_PASSWORD` 覆盖；登录页点击演示账号会自动填充。
 
 ## 功能范围
 
