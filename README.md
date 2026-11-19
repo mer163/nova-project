@@ -4,7 +4,7 @@
 
 新增的 MVP 位于 `backend/` 与 `frontend/`，覆盖账号注册登录、服务端 Session、基础 RBAC、需求和 Bug 的增删改查、状态流转与列表筛选。Go 服务将 React 构建产物嵌入单一二进制。原有 `server/`、`web/` 是旧版 Node.js 演示原型，保留作参考；下面原型说明不适用于新 MVP。
 
-**推荐启动方式：**准备 Docker Compose，设置 `MYSQL_ROOT_PASSWORD`、`MYSQL_PASSWORD` 与至少 12 位的 `ADMIN_PASSWORD`，运行 `docker compose up --build`，访问 `http://localhost:8080`。首次启动会自动创建管理员账号（默认用户名 `admin`），不会覆盖已有管理员。MySQL 数据保存在 `mysql_data` 卷，服务重启不会清除。对外启用 HTTPS 时设置 `COOKIE_SECURE=true`。
+**推荐启动方式：**准备 Docker Compose，设置 `MYSQL_ROOT_PASSWORD`、`MYSQL_PASSWORD` 与至少 12 位的 `ADMIN_PASSWORD`，运行 `docker compose up --build`，访问 `http://localhost:8080`。默认仅监听服务器本机；需要从其他设备访问时设置 `APP_BIND` 为指定服务器网卡地址，并可用 `APP_PORT` 调整端口。首次启动会自动创建管理员账号（默认用户名 `admin`），不会覆盖已有管理员。MySQL 数据保存在 `mysql_data` 卷，服务重启不会清除。对外启用 HTTPS 时设置 `COOKIE_SECURE=true`。
 
 本机开发可先启动 MySQL 8.4，然后设置 `MYSQL_DSN`（需包含 `parseTime=true`），在 `frontend/` 运行 `npm ci && npm run build`，在 `backend/` 运行 `go run .`。前端热更新可另开终端运行 `cd frontend && npm run dev`，Vite 将 `/api` 代理到 8080。构建顺序是前端先、Go 后；Go 的 `embed` 在编译时将 `backend/static` 打入二进制。
 

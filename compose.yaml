@@ -21,7 +21,7 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD with at least 12 characters}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
     ports:
-      - "8080:8080"
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8080}:8080"
     depends_on:
       mysql:
         condition: service_healthy
