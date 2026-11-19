@@ -2,6 +2,8 @@
 
 一个可直接运行的「类飞书项目」原型，覆盖需求管理、缺陷管理与权限管理三条主线。
 
+仓库：https://github.com/mer163/nova-project
+
 零依赖：只用 Node.js 内置模块（`node:http`、`node:crypto`、`node:fs`），数据落在本地 JSON 文件，启动即可用。
 
 ## 快速开始
