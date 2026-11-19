@@ -1,6 +1,7 @@
 services:
   mysql:
     image: mysql:8.4
+    restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: nova
@@ -15,6 +16,7 @@ services:
       retries: 20
   app:
     build: .
+    restart: unless-stopped
     environment:
       MYSQL_DSN: nova:${MYSQL_PASSWORD}@tcp(mysql:3306)/nova?charset=utf8mb4&parseTime=true&loc=Local
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
