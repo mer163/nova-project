@@ -45,17 +45,36 @@ type Session struct {
 }
 
 type Item struct {
-	ID          uint      `json:"id" gorm:"primaryKey"`
-	Kind        string    `json:"kind" gorm:"index;size:16;not null"`
-	Title       string    `json:"title" gorm:"size:200;not null"`
-	Description string    `json:"description" gorm:"type:text"`
-	Priority    string    `json:"priority" gorm:"size:8"`
-	Severity    string    `json:"severity" gorm:"size:20"`
-	Status      string    `json:"status" gorm:"index;size:32;not null"`
-	AssigneeID  *uint     `json:"assigneeId" gorm:"index"`
-	Iteration   string    `json:"iteration" gorm:"size:100"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	ID                uint              `json:"id" gorm:"primaryKey"`
+	Kind              string            `json:"kind" gorm:"index;size:16;not null"`
+	Title             string            `json:"title" gorm:"size:200;not null"`
+	Description       string            `json:"description" gorm:"type:text"`
+	Priority          string            `json:"priority" gorm:"size:8"`
+	Severity          string            `json:"severity" gorm:"size:20"`
+	Status            string            `json:"status" gorm:"index;size:32;not null"`
+	AssigneeID        *uint             `json:"assigneeId" gorm:"index"`
+	Iteration         string            `json:"iteration" gorm:"size:100"`
+	Template          string            `json:"template" gorm:"size:40"`
+	ProductDirection  string            `json:"productDirection" gorm:"size:100"`
+	BusinessLine      string            `json:"businessLine" gorm:"size:100"`
+	Endpoints         []string          `json:"endpoints" gorm:"serializer:json;type:json"`
+	Risk              string            `json:"risk" gorm:"size:20"`
+	PlannedVersion    string            `json:"plannedVersion" gorm:"size:100"`
+	ActualVersion     string            `json:"actualVersion" gorm:"size:100"`
+	ExpectedAt        string            `json:"expectedAt" gorm:"size:10"`
+	RequirementDoc    string            `json:"requirementDoc" gorm:"size:500"`
+	DesignDoc         string            `json:"designDoc" gorm:"size:500"`
+	TechnicalDoc      string            `json:"technicalDoc" gorm:"size:500"`
+	TestCaseDoc       string            `json:"testCaseDoc" gorm:"size:500"`
+	Roles             map[string]uint   `json:"roles" gorm:"serializer:json;type:json"`
+	Tracks            map[string]string `json:"tracks" gorm:"serializer:json;type:json"`
+	Watchers          []uint            `json:"watchers" gorm:"serializer:json;type:json"`
+	RelatedBugIDs     []uint            `json:"relatedBugIds" gorm:"serializer:json;type:json"`
+	OwnerID           *uint             `json:"ownerId" gorm:"index"`
+	CreatedByID       *uint             `json:"createdById" gorm:"index"`
+	CurrentOperatorID *uint             `json:"currentOperatorId" gorm:"index"`
+	CreatedAt         time.Time         `json:"createdAt"`
+	UpdatedAt         time.Time         `json:"updatedAt"`
 }
 
 type App struct {
@@ -76,7 +95,10 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	if err := db.AutoMigrate(&Role{}, &User{}, &Session{}, &Item{}); err != nil {
+	if err := db.AutoMigrate(&Role{}, &User{}, &Session{}, &Item{}, &ItemTransition{}); err != nil {
+		panic(err)
+	}
+	if err := migrateRequirementStatuses(db); err != nil {
 		panic(err)
 	}
 	app := &App{db: db, secureCookie: os.Getenv("COOKIE_SECURE") == "true"}
@@ -210,6 +232,8 @@ func (app *App) router() *gin.Engine {
 		group.PUT("/:id", app.auth("items:update"), app.updateItem(kind))
 		group.DELETE("/:id", app.auth("items:delete"), app.deleteItem(kind))
 	}
+	api.GET("/requirements/:id/history", app.auth("items:read"), app.requirementHistory)
+	api.PUT("/requirements/:id/tracks/:track", app.auth("items:update"), app.updateRequirementTrack)
 	assets, _ := fs.Sub(staticFiles, "static")
 	router.NoRoute(func(ctx *gin.Context) {
 		if strings.HasPrefix(ctx.Request.URL.Path, "/api/") {
@@ -452,7 +476,7 @@ func (app *App) createRole(ctx *gin.Context) { app.saveRole(ctx, true) }
 func (app *App) updateRole(ctx *gin.Context) { app.saveRole(ctx, false) }
 
 var transitions = map[string]map[string][]string{
-	"requirements": {"pending": {"in_progress", "rejected", "closed"}, "in_progress": {"done", "pending", "closed"}, "done": {"closed", "in_progress"}, "rejected": {}, "closed": {}},
+	"requirements": requirementTransitions,
 	"bugs":         {"new": {"assigned"}, "assigned": {"fixing", "new"}, "fixing": {"verified", "assigned"}, "verified": {"closed", "fixing"}, "closed": {"new"}},
 }
 
@@ -469,13 +493,28 @@ func validTransition(kind, previous, next string) bool {
 }
 
 type itemInput struct {
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	Priority    string `json:"priority"`
-	Severity    string `json:"severity"`
-	Status      string `json:"status"`
-	AssigneeID  *uint  `json:"assigneeId"`
-	Iteration   string `json:"iteration"`
+	Title            string          `json:"title"`
+	Description      string          `json:"description"`
+	Priority         string          `json:"priority"`
+	Severity         string          `json:"severity"`
+	Status           string          `json:"status"`
+	AssigneeID       *uint           `json:"assigneeId"`
+	Iteration        string          `json:"iteration"`
+	Template         string          `json:"template"`
+	ProductDirection string          `json:"productDirection"`
+	BusinessLine     string          `json:"businessLine"`
+	Endpoints        []string        `json:"endpoints"`
+	Risk             string          `json:"risk"`
+	PlannedVersion   string          `json:"plannedVersion"`
+	ActualVersion    string          `json:"actualVersion"`
+	ExpectedAt       string          `json:"expectedAt"`
+	RequirementDoc   string          `json:"requirementDoc"`
+	DesignDoc        string          `json:"designDoc"`
+	TechnicalDoc     string          `json:"technicalDoc"`
+	TestCaseDoc      string          `json:"testCaseDoc"`
+	Roles            map[string]uint `json:"roles"`
+	Watchers         []uint          `json:"watchers"`
+	RelatedBugIDs    []uint          `json:"relatedBugIds"`
 }
 
 func contains(values []string, target string) bool {
@@ -532,13 +571,38 @@ func (app *App) listItems(kind string) gin.HandlerFunc {
 			if priority := ctx.Query("priority"); priority != "" {
 				query = query.Where("priority = ?", priority)
 			}
+			if owner := ctx.Query("ownerId"); owner != "" {
+				query = query.Where("owner_id = ?", owner)
+			}
+			if operator := ctx.Query("currentOperatorId"); operator != "" {
+				query = query.Where("current_operator_id = ?", operator)
+			}
+			if template := ctx.Query("template"); template != "" {
+				query = query.Where("template = ?", template)
+			}
 		} else {
 			if severity := ctx.Query("severity"); severity != "" {
 				query = query.Where("severity = ?", severity)
 			}
 		}
 		items := make([]Item, 0)
-		if err := query.Order("updated_at desc").Find(&items).Error; err != nil {
+		if search := strings.TrimSpace(ctx.Query("q")); search != "" {
+			query = query.Where("title LIKE ?", "%"+search+"%")
+		}
+		order := "updated_at desc"
+		if kind == "requirements" {
+			switch ctx.Query("sort") {
+			case "created_desc":
+				order = "created_at desc"
+			case "created_asc":
+				order = "created_at asc"
+			case "priority":
+				order = "priority asc, updated_at desc"
+			case "id":
+				order = "id desc"
+			}
+		}
+		if err := query.Order(order).Find(&items).Error; err != nil {
 			fail(ctx, 500, "database error")
 			return
 		}
@@ -559,6 +623,10 @@ func (app *App) getItem(kind string) gin.HandlerFunc {
 
 func (app *App) createItem(kind string) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
+		if kind == "requirements" {
+			app.createRequirement(ctx)
+			return
+		}
 		var input itemInput
 		if err := ctx.ShouldBindJSON(&input); err != nil {
 			fail(ctx, 400, "invalid item")
@@ -583,6 +651,10 @@ func (app *App) createItem(kind string) gin.HandlerFunc {
 
 func (app *App) updateItem(kind string) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
+		if kind == "requirements" {
+			app.updateRequirement(ctx)
+			return
+		}
 		var item Item
 		if app.db.Where("kind = ? AND id = ?", kind, ctx.Param("id")).First(&item).Error != nil {
 			fail(ctx, 404, "item not found")
@@ -616,12 +688,23 @@ func (app *App) updateItem(kind string) gin.HandlerFunc {
 
 func (app *App) deleteItem(kind string) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		result := app.db.Where("kind = ? AND id = ?", kind, ctx.Param("id")).Delete(&Item{})
-		if result.Error != nil {
+		var affected int64
+		err := app.db.Transaction(func(tx *gorm.DB) error {
+			result := tx.Where("kind = ? AND id = ?", kind, ctx.Param("id")).Delete(&Item{})
+			if result.Error != nil {
+				return result.Error
+			}
+			affected = result.RowsAffected
+			if kind == "requirements" && affected > 0 {
+				return tx.Where("item_id = ?", ctx.Param("id")).Delete(&ItemTransition{}).Error
+			}
+			return nil
+		})
+		if err != nil {
 			fail(ctx, 500, "database error")
 			return
 		}
-		if result.RowsAffected == 0 {
+		if affected == 0 {
 			fail(ctx, 404, "item not found")
 			return
 		}

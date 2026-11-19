@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Link, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import './style.css'
 
-async function api(path, method = 'GET', body) {
+export async function api(path, method = 'GET', body) {
   const response = await fetch('/api' + path, { method, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined })
   if (response.status === 204) return null
   const data = await response.json()
@@ -97,11 +97,13 @@ function Admin() {
   </main>
 }
 
+import { RequirementList, RequirementDetail } from './requirements.jsx'
+
 function App() {
   const [user, setUser] = useState(undefined)
   useEffect(() => { api('/me').then(setUser).catch(() => setUser(null)) }, [])
   if (user === undefined) return <div className="loading">正在加载…</div>
-  return <Routes><Route path="/login" element={user ? <Navigate to="/requirements" /> : <Auth setUser={setUser} />} /><Route path="/register" element={user ? <Navigate to="/requirements" /> : <Auth register setUser={setUser} />} /><Route path="/requirements" element={user ? <Shell user={user} setUser={setUser}><Items kind="requirements" /></Shell> : <Navigate to="/login" />} /><Route path="/bugs" element={user ? <Shell user={user} setUser={setUser}><Items kind="bugs" /></Shell> : <Navigate to="/login" />} /><Route path="/admin" element={user?.role?.name === 'admin' ? <Shell user={user} setUser={setUser}><Admin /></Shell> : <Navigate to="/requirements" />} /><Route path="*" element={<Navigate to={user ? '/requirements' : '/login'} />} /></Routes>
+  return <Routes><Route path="/login" element={user ? <Navigate to="/requirements" /> : <Auth setUser={setUser} />} /><Route path="/register" element={user ? <Navigate to="/requirements" /> : <Auth register setUser={setUser} />} /><Route path="/requirements" element={user ? <Shell user={user} setUser={setUser}><RequirementList user={user} /></Shell> : <Navigate to="/login" />} /><Route path="/requirements/:id" element={user ? <Shell user={user} setUser={setUser}><RequirementDetail user={user} /></Shell> : <Navigate to="/login" />} /><Route path="/bugs" element={user ? <Shell user={user} setUser={setUser}><Items kind="bugs" /></Shell> : <Navigate to="/login" />} /><Route path="/admin" element={user?.role?.name === 'admin' ? <Shell user={user} setUser={setUser}><Admin /></Shell> : <Navigate to="/requirements" />} /><Route path="*" element={<Navigate to={user ? '/requirements' : '/login'} />} /></Routes>
 }
 
 createRoot(document.getElementById('root')).render(<BrowserRouter><App /></BrowserRouter>)

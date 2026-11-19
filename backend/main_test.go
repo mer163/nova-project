@@ -19,10 +19,11 @@ func TestStateTransitions(t *testing.T) {
 		kind, previous, next string
 		allowed              bool
 	}{
-		{"requirements", "pending", "in_progress", true},
-		{"requirements", "pending", "done", false},
-		{"requirements", "done", "closed", true},
-		{"requirements", "closed", "pending", false},
+		{"requirements", "requirement_review", "technical_review", true},
+		{"requirements", "requirement_review", "development", false},
+		{"requirements", "development", "technical_review", true},
+		{"requirements", "finished", "closed", true},
+		{"requirements", "closed", "requirement_review", false},
 		{"bugs", "new", "assigned", true},
 		{"bugs", "new", "closed", false},
 		{"bugs", "verified", "fixing", true},
@@ -32,6 +33,21 @@ func TestStateTransitions(t *testing.T) {
 		if actual := validTransition(test.kind, test.previous, test.next); actual != test.allowed {
 			t.Errorf("%s %s -> %s: got %v", test.kind, test.previous, test.next, actual)
 		}
+	}
+}
+
+func TestParallelDevelopmentGate(t *testing.T) {
+	item := Item{Endpoints: []string{"client", "server"}, Tracks: map[string]string{"client": "done", "server": "in_progress", "test_case": "done"}}
+	if tracksReady(item) {
+		t.Fatal("unfinished server work passed gate")
+	}
+	item.Tracks["server"] = "skipped"
+	if !tracksReady(item) {
+		t.Fatal("completed and skipped work should pass gate")
+	}
+	item.Tracks["test_case"] = "not_started"
+	if tracksReady(item) {
+		t.Fatal("unfinished test case passed gate")
 	}
 }
 
@@ -79,7 +95,7 @@ func TestMySQLAccountAndItemLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&Role{}, &User{}, &Session{}, &Item{}); err != nil {
+	if err := db.AutoMigrate(&Role{}, &User{}, &Session{}, &Item{}, &ItemTransition{}); err != nil {
 		t.Fatal(err)
 	}
 	app := &App{db: db}
@@ -121,7 +137,7 @@ func TestMySQLAccountAndItemLifecycle(t *testing.T) {
 	if denied.Code != 403 {
 		t.Fatalf("member role write: %d", denied.Code)
 	}
-	created := post("/api/requirements", map[string]any{"title": "Integration test", "priority": "P2"}, cookie)
+	created := post("/api/requirements", map[string]any{"title": "Integration test", "priority": "P2", "endpoints": []string{"server"}}, cookie)
 	if created.Code != 201 {
 		t.Fatalf("create item: %d %s", created.Code, created.Body.String())
 	}
@@ -130,6 +146,7 @@ func TestMySQLAccountAndItemLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Delete(&item)
+	defer db.Where("item_id = ?", item.ID).Delete(&ItemTransition{})
 	secondConnection, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
@@ -140,6 +157,64 @@ func TestMySQLAccountAndItemLifecycle(t *testing.T) {
 	}
 	if persisted.Title != item.Title {
 		t.Fatal("item was not persisted")
+	}
+	if persisted.Status != "requirement_review" || persisted.Roles["requirement_owner"] != user.ID {
+		t.Fatalf("requirement defaults missing: %+v", persisted)
+	}
+	put := func(endpoint string, body any) *httptest.ResponseRecorder {
+		payload, _ := json.Marshal(body)
+		request := httptest.NewRequest(http.MethodPut, endpoint, bytes.NewReader(payload))
+		request.Header.Set("Content-Type", "application/json")
+		request.AddCookie(cookie)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response
+	}
+	changeStatus := func(next string, expected int) {
+		item.Status = next
+		response := put("/api/requirements/"+strconv.Itoa(int(item.ID)), item)
+		if response.Code != expected {
+			t.Fatalf("status %s: %d %s", next, response.Code, response.Body.String())
+		}
+		if expected == 200 && json.Unmarshal(response.Body.Bytes(), &item) != nil {
+			t.Fatal("invalid updated item")
+		}
+	}
+	changeStatus("show_case", 409)
+	changeStatus("technical_review", 200)
+	changeStatus("development", 200)
+	changeStatus("show_case", 409)
+	for _, track := range []string{"server", "test_case"} {
+		response := put("/api/requirements/"+strconv.Itoa(int(item.ID))+"/tracks/"+track, map[string]string{"status": "done"})
+		if response.Code != 200 {
+			t.Fatalf("track %s: %d %s", track, response.Code, response.Body.String())
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	changeStatus("show_case", 200)
+	historyRequest := httptest.NewRequest(http.MethodGet, "/api/requirements/"+strconv.Itoa(int(item.ID))+"/history", nil)
+	historyRequest.AddCookie(cookie)
+	historyResponse := httptest.NewRecorder()
+	router.ServeHTTP(historyResponse, historyRequest)
+	var history []ItemTransition
+	if historyResponse.Code != 200 || json.Unmarshal(historyResponse.Body.Bytes(), &history) != nil || len(history) != 6 {
+		t.Fatalf("history: %d %s", historyResponse.Code, historyResponse.Body.String())
+	}
+	legacy := Item{Kind: "requirements", Title: "Legacy", Priority: "P2", Status: "pending", AssigneeID: &user.ID}
+	if err := db.Create(&legacy).Error; err != nil {
+		t.Fatal(err)
+	}
+	defer db.Delete(&legacy)
+	if err := migrateRequirementStatuses(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&legacy, legacy.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Status != "requirement_review" || legacy.Template != "feature" || legacy.OwnerID == nil || *legacy.OwnerID != user.ID {
+		t.Fatalf("legacy requirement not migrated: %+v", legacy)
 	}
 	if logout := post("/api/logout", nil, cookie); logout.Code != 204 {
 		t.Fatalf("logout: %d", logout.Code)
