@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
+	"reflect"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -54,31 +56,34 @@ type ItemTransition struct {
 	FromStatus string    `json:"fromStatus" gorm:"size:32"`
 	ToStatus   string    `json:"toStatus" gorm:"size:32"`
 	Track      string    `json:"track" gorm:"size:32"`
+	Reason     string    `json:"reason" gorm:"size:500"`
 	CreatedAt  time.Time `json:"createdAt"`
 }
 
 func migrateRequirementStatuses(db *gorm.DB) error {
-	// Rows written by the previous release have no development flag. Preserve
-	// the endpoint lock for work that has already reached development.
-	if err := db.Model(&Item{}).Where("kind = ? AND status IN ?", "requirements", []string{"in_progress", "done", "development", "show_case", "first_test", "product_walkthrough", "regression_test", "service_online", "launch_review", "freeze", "integration_test", "submission", "finished"}).Update("development_started", true).Error; err != nil {
-		return err
-	}
-	if err := db.Model(&Item{}).Where("kind = ? AND id IN (SELECT item_id FROM item_transitions WHERE from_status = ? OR to_status = ?)", "requirements", "development", "development").Update("development_started", true).Error; err != nil {
-		return err
-	}
-	legacy := map[string]string{"pending": "requirement_review", "in_progress": "development", "done": "finished"}
-	for old, next := range legacy {
-		if err := db.Model(&Item{}).Where("kind = ? AND status = ?", "requirements", old).Update("status", next).Error; err != nil {
+	return db.Transaction(func(tx *gorm.DB) error {
+		// Rows written by the previous release have no development flag. Preserve
+		// the endpoint lock for work that has already reached development.
+		if err := tx.Model(&Item{}).Where("kind = ? AND status IN ?", "requirements", []string{"in_progress", "done", "development", "show_case", "first_test", "product_walkthrough", "regression_test", "service_online", "launch_review", "freeze", "integration_test", "submission", "finished"}).Update("development_started", true).Error; err != nil {
 			return err
 		}
-	}
-	if err := db.Model(&Item{}).Where("kind = ? AND (template = '' OR template IS NULL)", "requirements").Update("template", "feature").Error; err != nil {
-		return err
-	}
-	if err := db.Model(&Item{}).Where("kind = ? AND (risk = '' OR risk IS NULL)", "requirements").Update("risk", "none").Error; err != nil {
-		return err
-	}
-	return db.Model(&Item{}).Where("kind = ? AND owner_id IS NULL AND assignee_id IS NOT NULL", "requirements").Update("owner_id", gorm.Expr("assignee_id")).Error
+		if err := tx.Model(&Item{}).Where("kind = ? AND id IN (SELECT item_id FROM item_transitions WHERE from_status = ? OR to_status = ?)", "requirements", "development", "development").Update("development_started", true).Error; err != nil {
+			return err
+		}
+		legacy := map[string]string{"pending": "requirement_review", "in_progress": "development", "done": "finished"}
+		for old, next := range legacy {
+			if err := tx.Model(&Item{}).Where("kind = ? AND status = ?", "requirements", old).Update("status", next).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Model(&Item{}).Where("kind = ? AND (template = '' OR template IS NULL)", "requirements").Update("template", "feature").Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&Item{}).Where("kind = ? AND (risk = '' OR risk IS NULL)", "requirements").Update("risk", "none").Error; err != nil {
+			return err
+		}
+		return tx.Model(&Item{}).Where("kind = ? AND owner_id IS NULL AND assignee_id IS NOT NULL", "requirements").Update("owner_id", gorm.Expr("assignee_id")).Error
+	})
 }
 
 func validWebURL(value string) bool {
@@ -199,6 +204,46 @@ func currentRequirementOperator(item Item) *uint {
 	return item.CreatedByID
 }
 
+func isRequirementAdmin(actor User) bool { return actor.Role.Name == "admin" }
+
+func isRequirementOwner(item Item, actor User) bool {
+	return item.OwnerID != nil && *item.OwnerID == actor.ID
+}
+
+func mayMoveRequirement(item Item, actor User) bool {
+	operator := currentRequirementOperator(item)
+	return isRequirementAdmin(actor) || (operator != nil && *operator == actor.ID)
+}
+
+func mayUpdateTrack(item Item, track string, actor User) bool {
+	if isRequirementAdmin(actor) || isRequirementOwner(item, actor) || item.Roles["pm"] == actor.ID {
+		return true
+	}
+	role := track + "_developer"
+	if track == "test_case" {
+		role = "test"
+	}
+	assigned := item.Roles[role]
+	return assigned != 0 && assigned == actor.ID
+}
+
+func inputFromRequirement(item Item) itemInput {
+	var assigneeID *uint
+	if item.AssigneeID != nil {
+		id := *item.AssigneeID
+		assigneeID = &id
+	}
+	return itemInput{Title: item.Title, Description: item.Description, Priority: item.Priority,
+		Status: item.Status, AssigneeID: assigneeID, Iteration: item.Iteration,
+		Template: item.Template, ProductDirection: item.ProductDirection, BusinessLine: item.BusinessLine,
+		Endpoints: append([]string(nil), item.Endpoints...), Risk: item.Risk, PlannedVersion: item.PlannedVersion,
+		ActualVersion: item.ActualVersion, ExpectedAt: item.ExpectedAt,
+		RequirementDoc: item.RequirementDoc, DesignDoc: item.DesignDoc,
+		TechnicalDoc: item.TechnicalDoc, TestCaseDoc: item.TestCaseDoc,
+		Roles: item.Roles, Watchers: append([]uint(nil), item.Watchers...),
+		RelatedBugIDs: append([]uint(nil), item.RelatedBugIDs...)}
+}
+
 func applyRequirementInput(item *Item, input itemInput, actorID uint, create bool) {
 	item.Title = strings.TrimSpace(input.Title)
 	item.Description = input.Description
@@ -298,8 +343,8 @@ func tracksReady(item Item) bool {
 }
 
 func (app *App) updateRequirement(ctx *gin.Context) {
-	var input itemInput
-	if err := ctx.ShouldBindJSON(&input); err != nil {
+	var fields map[string]json.RawMessage
+	if err := ctx.ShouldBindJSON(&fields); err != nil || fields == nil {
 		fail(ctx, 400, "invalid requirement")
 		return
 	}
@@ -312,6 +357,35 @@ func (app *App) updateRequirement(ctx *gin.Context) {
 			return errors.New("需求不存在")
 		}
 		previous := item.Status
+		input := inputFromRequirement(item)
+		if _, present := fields["roles"]; present {
+			input.Roles = nil
+		}
+		payload, _ := json.Marshal(fields)
+		if err := json.Unmarshal(payload, &input); err != nil {
+			code = 400
+			return errors.New("invalid requirement")
+		}
+		if !reflect.DeepEqual(item.Roles, input.Roles) && !isRequirementAdmin(actor) && !isRequirementOwner(item, actor) {
+			code = 403
+			return errors.New("仅需求负责人可分配协作角色")
+		}
+		if (!reflect.DeepEqual(item.AssigneeID, input.AssigneeID) || !sameEndpoints(item.Endpoints, input.Endpoints) || item.PlannedVersion != input.PlannedVersion || item.ActualVersion != input.ActualVersion) && !isRequirementAdmin(actor) && !isRequirementOwner(item, actor) {
+			code = 403
+			return errors.New("仅需求负责人可修改人员、涉及端及版本")
+		}
+		if previous != input.Status && !mayMoveRequirement(item, actor) {
+			code = 403
+			return errors.New("仅当前节点处理人可流转需求")
+		}
+		if (input.Status == "closed" || input.Status == "rejected") && previous != input.Status && strings.TrimSpace(input.Reason) == "" {
+			code = 400
+			return errors.New("关闭或拒绝需求须填写原因")
+		}
+		if utf8.RuneCountInString(input.Reason) > 500 {
+			code = 400
+			return errors.New("原因不能超过 500 字")
+		}
 		if len(item.Endpoints) > 0 && len(input.Endpoints) == 0 {
 			code = 400
 			return errors.New("请至少保留一个涉及端")
@@ -319,9 +393,6 @@ func (app *App) updateRequirement(ctx *gin.Context) {
 		if item.DevelopmentStarted && !sameEndpoints(item.Endpoints, input.Endpoints) {
 			code = 409
 			return errors.New("开发开始后不能更改涉及端")
-		}
-		if input.Status == "" {
-			input.Status = previous
 		}
 		if !validTransition("requirements", previous, input.Status) {
 			code = 409
@@ -345,7 +416,7 @@ func (app *App) updateRequirement(ctx *gin.Context) {
 			return err
 		}
 		if previous != item.Status {
-			return tx.Create(&ItemTransition{ItemID: item.ID, ActorID: actor.ID, Action: "status", FromStatus: previous, ToStatus: item.Status}).Error
+			return tx.Create(&ItemTransition{ItemID: item.ID, ActorID: actor.ID, Action: "status", FromStatus: previous, ToStatus: item.Status, Reason: strings.TrimSpace(input.Reason)}).Error
 		}
 		return nil
 	})
@@ -378,6 +449,7 @@ func sameEndpoints(a, b []string) bool {
 
 type trackInput struct {
 	Status string `json:"status"`
+	Reason string `json:"reason"`
 }
 
 func (app *App) updateRequirementTrack(ctx *gin.Context) {
@@ -403,6 +475,24 @@ func (app *App) updateRequirementTrack(ctx *gin.Context) {
 			code = 400
 			return errors.New("该端未列入需求")
 		}
+		if !mayUpdateTrack(item, track, actor) {
+			code = 403
+			return errors.New("仅并行任务负责人或需求负责人可更新")
+		}
+		if utf8.RuneCountInString(input.Reason) > 500 {
+			code = 400
+			return errors.New("原因不能超过 500 字")
+		}
+		if input.Status == "skipped" {
+			if !isRequirementAdmin(actor) && item.Roles["pm"] != actor.ID {
+				code = 403
+				return errors.New("仅产品经理可跳过并行任务")
+			}
+			if strings.TrimSpace(input.Reason) == "" {
+				code = 400
+				return errors.New("跳过并行任务须填写原因")
+			}
+		}
 		if item.Tracks == nil {
 			item.Tracks = map[string]string{}
 		}
@@ -415,7 +505,7 @@ func (app *App) updateRequirementTrack(ctx *gin.Context) {
 		if err := tx.Save(&item).Error; err != nil {
 			return err
 		}
-		return tx.Create(&ItemTransition{ItemID: item.ID, ActorID: actor.ID, Action: "track", FromStatus: previous, ToStatus: input.Status, Track: track}).Error
+		return tx.Create(&ItemTransition{ItemID: item.ID, ActorID: actor.ID, Action: "track", FromStatus: previous, ToStatus: input.Status, Track: track, Reason: strings.TrimSpace(input.Reason)}).Error
 	})
 	if err != nil {
 		if code == 500 {

@@ -51,6 +51,21 @@ func TestParallelDevelopmentGate(t *testing.T) {
 	}
 }
 
+func TestRequirementActorPolicies(t *testing.T) {
+	owner, pm, developer, tester, outsider := User{ID: 11}, User{ID: 12}, User{ID: 13}, User{ID: 14}, User{ID: 15}
+	admin := User{ID: 16, Role: Role{Name: "admin"}}
+	item := Item{Status: "requirement_review", OwnerID: &owner.ID, Roles: map[string]uint{
+		"requirement_owner": owner.ID, "pm": pm.ID, "server_developer": developer.ID, "test": tester.ID,
+	}}
+	if !mayMoveRequirement(item, pm) || mayMoveRequirement(item, owner) || mayMoveRequirement(item, outsider) || !mayMoveRequirement(item, admin) {
+		t.Fatal("requirement review must be advanced by PM or admin")
+	}
+	item.Status = "development"
+	if !mayUpdateTrack(item, "server", developer) || mayUpdateTrack(item, "test_case", developer) || !mayUpdateTrack(item, "test_case", tester) || mayUpdateTrack(item, "server", outsider) || !mayUpdateTrack(item, "server", admin) {
+		t.Fatal("parallel work must be limited to assigned actors")
+	}
+}
+
 func TestProtectedRoutesAndOrigin(t *testing.T) {
 	app := &App{}
 	router := app.router()
@@ -170,6 +185,47 @@ func TestMySQLAccountAndItemLifecycle(t *testing.T) {
 		router.ServeHTTP(response, request)
 		return response
 	}
+	otherName := "other_" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	if result := post("/api/register", map[string]string{"username": otherName, "password": password}, nil); result.Code != 201 {
+		t.Fatalf("register second user: %d", result.Code)
+	}
+	var other User
+	if err := db.Preload("Role").Where("username = ?", otherName).First(&other).Error; err != nil {
+		t.Fatal(err)
+	}
+	defer func() { db.Where("user_id = ?", other.ID).Delete(&Session{}); db.Delete(&other) }()
+	otherLogin := post("/api/login", map[string]string{"username": otherName, "password": password}, nil)
+	if otherLogin.Code != 200 || len(otherLogin.Result().Cookies()) == 0 {
+		t.Fatalf("second login: %d", otherLogin.Code)
+	}
+	otherPut := func(endpoint string, body any) *httptest.ResponseRecorder {
+		payload, _ := json.Marshal(body)
+		request := httptest.NewRequest(http.MethodPut, endpoint, bytes.NewReader(payload))
+		request.Header.Set("Content-Type", "application/json")
+		request.AddCookie(otherLogin.Result().Cookies()[0])
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response
+	}
+	itemURL := "/api/requirements/" + strconv.Itoa(int(item.ID))
+	deleteRequest := httptest.NewRequest(http.MethodDelete, itemURL, nil)
+	deleteRequest.AddCookie(otherLogin.Result().Cookies()[0])
+	deleteResponse := httptest.NewRecorder()
+	router.ServeHTTP(deleteResponse, deleteRequest)
+	if deleteResponse.Code != 403 {
+		t.Fatalf("unassigned delete: %d %s", deleteResponse.Code, deleteResponse.Body.String())
+	}
+	if response := otherPut(itemURL, map[string]any{"status": "technical_review"}); response.Code != 403 {
+		t.Fatalf("unassigned status write: %d %s", response.Code, response.Body.String())
+	}
+	if response := otherPut(itemURL, map[string]any{"roles": map[string]uint{"requirement_owner": other.ID}}); response.Code != 403 {
+		t.Fatalf("unassigned role write: %d %s", response.Code, response.Body.String())
+	}
+	if response := put(itemURL, map[string]any{"description": "partial update"}); response.Code != 200 {
+		t.Fatalf("partial update: %d %s", response.Code, response.Body.String())
+	} else if err := json.Unmarshal(response.Body.Bytes(), &item); err != nil || item.Title != "Integration test" || len(item.Endpoints) != 1 || item.Roles["requirement_owner"] != user.ID {
+		t.Fatalf("partial update erased fields: %s", response.Body.String())
+	}
 	changeStatus := func(next string, expected int) {
 		item.Status = next
 		response := put("/api/requirements/"+strconv.Itoa(int(item.ID)), item)
@@ -192,10 +248,32 @@ func TestMySQLAccountAndItemLifecycle(t *testing.T) {
 	}
 	changeStatus("development", 200)
 	changeStatus("show_case", 409)
+	if response := otherPut(itemURL+"/tracks/server", map[string]string{"status": "done"}); response.Code != 403 {
+		t.Fatalf("unassigned track write: %d %s", response.Code, response.Body.String())
+	}
+	if response := put(itemURL+"/tracks/server", map[string]string{"status": "skipped"}); response.Code != 403 {
+		t.Fatalf("non-PM track skip: %d %s", response.Code, response.Body.String())
+	}
 	for _, track := range []string{"server", "test_case"} {
 		response := put("/api/requirements/"+strconv.Itoa(int(item.ID))+"/tracks/"+track, map[string]string{"status": "done"})
 		if response.Code != 200 {
 			t.Fatalf("track %s: %d %s", track, response.Code, response.Body.String())
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pmRole := put(itemURL, map[string]any{"roles": map[string]uint{"requirement_owner": user.ID, "pm": user.ID}})
+	if pmRole.Code != 200 || json.Unmarshal(pmRole.Body.Bytes(), &item) != nil {
+		t.Fatalf("assign PM: %d %s", pmRole.Code, pmRole.Body.String())
+	}
+	if response := put(itemURL+"/tracks/server", map[string]string{"status": "skipped"}); response.Code != 400 {
+		t.Fatalf("skip without reason: %d %s", response.Code, response.Body.String())
+	}
+	for _, update := range []map[string]string{{"status": "skipped", "reason": "本轮取消服务端工作"}, {"status": "done"}} {
+		response := put(itemURL+"/tracks/server", update)
+		if response.Code != 200 {
+			t.Fatalf("PM track update: %d %s", response.Code, response.Body.String())
 		}
 		if err := json.Unmarshal(response.Body.Bytes(), &item); err != nil {
 			t.Fatal(err)
@@ -207,8 +285,11 @@ func TestMySQLAccountAndItemLifecycle(t *testing.T) {
 	historyResponse := httptest.NewRecorder()
 	router.ServeHTTP(historyResponse, historyRequest)
 	var history []ItemTransition
-	if historyResponse.Code != 200 || json.Unmarshal(historyResponse.Body.Bytes(), &history) != nil || len(history) != 8 {
+	if historyResponse.Code != 200 || json.Unmarshal(historyResponse.Body.Bytes(), &history) != nil || len(history) != 10 {
 		t.Fatalf("history: %d %s", historyResponse.Code, historyResponse.Body.String())
+	}
+	if history[1].Reason != "" || history[2].Reason != "本轮取消服务端工作" {
+		t.Fatalf("skip reason missing from history: %+v", history[:3])
 	}
 	legacy := Item{Kind: "requirements", Title: "Legacy", Priority: "P2", Status: "pending", AssigneeID: &user.ID}
 	legacyDevelopment := Item{Kind: "requirements", Title: "Legacy development", Priority: "P2", Status: "in_progress", AssigneeID: &user.ID}

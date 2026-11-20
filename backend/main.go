@@ -494,6 +494,7 @@ func validTransition(kind, previous, next string) bool {
 }
 
 type itemInput struct {
+	Reason           string          `json:"reason"`
 	Title            string          `json:"title"`
 	Description      string          `json:"description"`
 	Priority         string          `json:"priority"`
@@ -690,7 +691,22 @@ func (app *App) updateItem(kind string) gin.HandlerFunc {
 func (app *App) deleteItem(kind string) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		var affected int64
+		forbidden := false
 		err := app.db.Transaction(func(tx *gorm.DB) error {
+			if kind == "requirements" {
+				var item Item
+				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("kind = ? AND id = ?", kind, ctx.Param("id")).First(&item).Error; err != nil {
+					if errors.Is(err, gorm.ErrRecordNotFound) {
+						return nil
+					}
+					return err
+				}
+				actor := ctx.MustGet("user").(User)
+				if !isRequirementAdmin(actor) && !isRequirementOwner(item, actor) {
+					forbidden = true
+					return nil
+				}
+			}
 			result := tx.Where("kind = ? AND id = ?", kind, ctx.Param("id")).Delete(&Item{})
 			if result.Error != nil {
 				return result.Error
@@ -703,6 +719,10 @@ func (app *App) deleteItem(kind string) gin.HandlerFunc {
 		})
 		if err != nil {
 			fail(ctx, 500, "database error")
+			return
+		}
+		if forbidden {
+			fail(ctx, 403, "仅需求负责人可删除需求")
 			return
 		}
 		if affected == 0 {
